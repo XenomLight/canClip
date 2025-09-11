@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AuthClient } from '@dfinity/auth-client';
 import { canClip_backend } from 'declarations/canClip_backend';
 import { Camera, Mic, MicOff, Video, VideoOff, Play, Pause, Download, Trash2, User, LogOut } from 'lucide-react';
+import Webcam from 'react-webcam';
 import './index.scss';
 
 function App() {
@@ -19,9 +20,11 @@ function App() {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [userMedia, setUserMedia] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
 
   // Refs
-  const videoRef = useRef(null);
+  const webcamRef = useRef(null);
+  const playbackVideoRef = useRef(null);
   const audioRef = useRef(null);
   const mediaRecorderRef = useRef(null);
 
@@ -78,19 +81,53 @@ function App() {
     setUserMedia([]);
   };
 
-  // Start media capture
+  // Start preview using react-webcam (video) or raw getUserMedia (audio)
+  const startPreview = async () => {
+    try {
+      if (mediaType === 'video') {
+        setIsPreviewing(true);
+        // react-webcam will request stream on mount; capture the stream shortly after
+        setTimeout(() => {
+          const stream = webcamRef.current && webcamRef.current.stream;
+          if (stream) {
+            setMediaStream(stream);
+          }
+        }, 100);
+      } else {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        setMediaStream(stream);
+        setIsPreviewing(true);
+      }
+    } catch (error) {
+      console.error('Error starting preview:', error);
+      alert('Error accessing camera/microphone. Please check permissions.');
+    }
+  };
+
+  const stopPreview = () => {
+    if (isRecording) return; // don't stop preview while recording
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+    }
+    setMediaStream(null);
+    setIsPreviewing(false);
+  };
+
+  // Start media capture (uses existing preview stream if present)
   const startCapture = async () => {
     try {
-      const constraints = {
-        video: mediaType === 'video' ? { width: 1280, height: 720 } : false,
-        audio: true
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      setMediaStream(stream);
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      let stream = mediaStream;
+      if (!stream) {
+        await startPreview();
+        stream = mediaStream;
+      }
+      // If still null, attempt to pull from webcamRef directly
+      if (!stream && webcamRef.current && webcamRef.current.stream) {
+        stream = webcamRef.current.stream;
+        setMediaStream(stream);
+      }
+      if (!stream) {
+        throw new Error('Preview stream not available');
       }
 
       const recorder = new MediaRecorder(stream, {
@@ -122,16 +159,12 @@ function App() {
     }
   };
 
-  // Stop media capture
+  // Stop media capture (keeps preview on)
   const stopCapture = () => {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stop();
     }
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => track.stop());
-    }
     setIsRecording(false);
-    setMediaStream(null);
   };
 
   // Upload media to backend using chunks
@@ -227,15 +260,15 @@ function App() {
       const url = URL.createObjectURL(blob);
       
       if (mediaItem.mediaType === 'video') {
-        if (videoRef.current) {
-          videoRef.current.src = url;
-          videoRef.current.play();
+        if (playbackVideoRef.current) {
+          playbackVideoRef.current.src = url;
+          await playbackVideoRef.current.play().catch(() => {});
           setIsPlaying(true);
         }
       } else {
         if (audioRef.current) {
           audioRef.current.src = url;
-          audioRef.current.play();
+          await audioRef.current.play().catch(() => {});
           setIsPlaying(true);
         }
       }
@@ -263,13 +296,16 @@ function App() {
     }
   };
 
-  // Format file size
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
+  const toNumber = (v) => (typeof v === 'bigint' ? Number(v) : v);
+  // Format file size (handles BigInt)
+  const formatFileSize = (bytesLike) => {
+    const bytes = toNumber(bytesLike) ?? 0;
+    if (bytes <= 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    const i = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)) || 0);
+    const value = bytes / Math.pow(k, i);
+    return `${value.toFixed(2)} ${sizes[i]}`;
   };
 
   if (isLoading) {
@@ -300,6 +336,8 @@ function App() {
       </div>
     );
   }
+
+  const videoConstraints = { width: 1280, height: 720, facingMode: 'user' };
 
   return (
     <div className="app">
@@ -337,27 +375,55 @@ function App() {
           </div>
 
           <div className="capture-controls">
-            {!isRecording ? (
-              <button onClick={startCapture} className="capture-btn start">
+            {!isPreviewing ? (
+              <button onClick={startPreview} className="capture-btn start">
                 <Camera size={20} />
-                Start Recording
+                Enable {mediaType === 'video' ? 'Camera' : 'Microphone'} Preview
               </button>
             ) : (
-              <button onClick={stopCapture} className="capture-btn stop">
-                <VideoOff size={20} />
-                Stop Recording
-              </button>
+              <>
+                {!isRecording ? (
+                  <button onClick={startCapture} className="capture-btn start">
+                    <Camera size={20} />
+                    Start Recording
+                  </button>
+                ) : (
+                  <button onClick={stopCapture} className="capture-btn stop">
+                    <VideoOff size={20} />
+                    Stop Recording
+                  </button>
+                )}
+                {!isRecording && (
+                  <button onClick={stopPreview} className="capture-btn stop" style={{ marginLeft: 10 }}>
+                    <VideoOff size={20} />
+                    Disable {mediaType === 'video' ? 'Camera' : 'Microphone'}
+                  </button>
+                )}
+              </>
             )}
           </div>
 
-          {mediaStream && (
+          {isPreviewing && (
             <div className="preview">
               {mediaType === 'video' ? (
-                <video ref={videoRef} autoPlay muted className="preview-video" />
+                <Webcam
+                  ref={webcamRef}
+                  audio={true}
+                  muted
+                  playsInline
+                  className="preview-video"
+                  videoConstraints={videoConstraints}
+                  onUserMedia={(stream) => {
+                    setMediaStream(stream);
+                  }}
+                  onUserMediaError={(e) => {
+                    console.error('Webcam error', e);
+                  }}
+                />
               ) : (
                 <div className="audio-preview">
                   <Mic size={48} />
-                  <p>Recording Audio...</p>
+                  <p>{isRecording ? 'Recording Audio...' : 'Microphone Enabled'}</p>
                 </div>
               )}
             </div>
@@ -403,7 +469,7 @@ function App() {
         </div>
 
         {/* Hidden video/audio elements for playback */}
-        <video ref={videoRef} style={{ display: 'none' }} />
+        <video ref={playbackVideoRef} style={{ display: 'none' }} />
         <audio ref={audioRef} style={{ display: 'none' }} />
       </main>
     </div>

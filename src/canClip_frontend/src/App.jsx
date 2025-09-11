@@ -59,7 +59,7 @@ function App() {
       await authClient.login({
         identityProvider: process.env.DFX_NETWORK === "ic" 
           ? "https://identity.ic0.app/#authorize"
-          : `http://localhost:4943?canisterId=rdmx6-jaaaa-aaaaa-aaadq-cai`,
+          : `http://rdmx6-jaaaa-aaaaa-aaadq-cai.localhost:4943/`,
         onSuccess: async () => {
           setIsAuthenticated(true);
           await authenticateUser(authClient);
@@ -134,24 +134,52 @@ function App() {
     setMediaStream(null);
   };
 
-  // Upload media to backend
+  // Upload media to backend using chunks
   const uploadMedia = async (blob) => {
     try {
+      const CHUNK_SIZE = 500000; // 500KB chunks
       const arrayBuffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
       
-      const result = await canClip_backend.uploadMedia(
+      // Calculate chunk count
+      const chunkCount = Math.ceil(uint8Array.length / CHUNK_SIZE);
+      
+      // Initialize media upload
+      const initResult = await canClip_backend.uploadMediaInit(
         `Recording_${Date.now()}`,
         mediaType,
-        Array.from(uint8Array)
+        chunkCount,
+        CHUNK_SIZE,
+        uint8Array.length
       );
 
-      if ('ok' in result) {
-        await loadUserMedia();
-        alert('Media uploaded successfully!');
-      } else {
-        alert('Upload failed: ' + result.err);
+      if ('err' in initResult) {
+        alert('Upload initialization failed: ' + initResult.err);
+        return;
       }
+
+      const mediaId = initResult.ok;
+      
+      // Upload chunks
+      for (let i = 0; i < chunkCount; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, uint8Array.length);
+        const chunk = Array.from(uint8Array.slice(start, end));
+        
+        const chunkResult = await canClip_backend.uploadMediaChunk(
+          mediaId,
+          i,
+          chunk
+        );
+        
+        if ('err' in chunkResult) {
+          alert(`Upload failed at chunk ${i}: ${chunkResult.err}`);
+          return;
+        }
+      }
+
+      await loadUserMedia();
+      alert('Media uploaded successfully!');
     } catch (error) {
       console.error('Upload error:', error);
       alert('Upload failed: ' + error.message);
@@ -168,25 +196,52 @@ function App() {
     }
   };
 
-  // Play media
-  const playMedia = (mediaItem) => {
-    const blob = new Blob([mediaItem.data], { 
-      type: mediaItem.mediaType === 'video' ? 'video/webm' : 'audio/webm' 
-    });
-    const url = URL.createObjectURL(blob);
-    
-    if (mediaItem.mediaType === 'video') {
-      if (videoRef.current) {
-        videoRef.current.src = url;
-        videoRef.current.play();
-        setIsPlaying(true);
+  // Play media by fetching and reassembling chunks
+  const playMedia = async (mediaItem) => {
+    try {
+      const chunks = [];
+      
+      // Fetch all chunks
+      for (let i = 0; i < mediaItem.chunkCount; i++) {
+        const chunkData = await canClip_backend.getMediaChunk(mediaItem.id, i);
+        if (chunkData) {
+          chunks.push(new Uint8Array(chunkData));
+        } else {
+          throw new Error(`Failed to fetch chunk ${i}`);
+        }
       }
-    } else {
-      if (audioRef.current) {
-        audioRef.current.src = url;
-        audioRef.current.play();
-        setIsPlaying(true);
+      
+      // Reassemble the media
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const uint8Array = new Uint8Array(totalLength);
+      let offset = 0;
+      
+      for (const chunk of chunks) {
+        uint8Array.set(chunk, offset);
+        offset += chunk.length;
       }
+      
+      const blob = new Blob([uint8Array], { 
+        type: mediaItem.mediaType === 'video' ? 'video/webm' : 'audio/webm' 
+      });
+      const url = URL.createObjectURL(blob);
+      
+      if (mediaItem.mediaType === 'video') {
+        if (videoRef.current) {
+          videoRef.current.src = url;
+          videoRef.current.play();
+          setIsPlaying(true);
+        }
+      } else {
+        if (audioRef.current) {
+          audioRef.current.src = url;
+          audioRef.current.play();
+          setIsPlaying(true);
+        }
+      }
+    } catch (error) {
+      console.error('Error playing media:', error);
+      alert('Failed to play media: ' + error.message);
     }
   };
 
@@ -330,7 +385,7 @@ function App() {
                   </div>
                   <div className="media-info">
                     <h3>{item.name}</h3>
-                    <p>{item.mediaType} • {formatFileSize(item.size)}</p>
+                    <p>{item.mediaType} • {formatFileSize(item.totalSize)}</p>
                     <p>{new Date(Number(item.createdAt) / 1000000).toLocaleDateString()}</p>
                   </div>
                   <div className="media-actions">

@@ -1,0 +1,37 @@
+{
+  "canisters": {
+    "canClip_backend": {
+      "main": "src/canClip_backend/main.mo",
+      "type": "motoko"
+    },
+    "canClip_frontend": {
+      "dependencies": [
+        "canClip_backend"
+      ],
+      "source": [
+        "src/canClip_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "canClip_frontend"
+    },
+    "internet-identity": {
+      "candid": "https://github.com/dfinity/internet-identity/releases/latest/download/internet_identity.did",
+      "type": "custom",
+      "specified_id": "rdmx6-jaaaa-aaaaa-aaadq-cai",
+      "remote": {
+        "id": {
+          "ic": "rdmx6-jaaaa-aaaaa-aaadq-cai"
+        }
+      },
+      "wasm": "https://github.com/dfinity/internet-identity/releases/latest/download/internet_identity_dev.wasm.gz"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}

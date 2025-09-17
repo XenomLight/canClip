@@ -169,7 +169,8 @@ persistent actor {
     #ok(mediaId)
   };
   
-  public shared(msg) func uploadMediaChunk(mediaId: Text, index: Nat, chunk: Blob) : async Result.Result<Text, Text> {
+  public shared(msg) func uploadMediaChunk(mediaId: Text, index: Nat, chunk: [Nat8]) : async Result.Result<Text, Text> {
+
     let caller = msg.caller;
     
     // Validate chunk size
@@ -188,14 +189,15 @@ persistent actor {
         if (index >= media.chunkCount) {
           return #err("Chunk index out of range");
         };
-        
-        let chunkKey = mediaId # "_" # Int.toText(index);
+        let chunkBlob = Blob.fromArray(chunk);
+
         let mediaChunk = {
           mediaId = mediaId;
           index = index;
-          data = chunk;
+          data = chunkBlob;
         };
-        
+
+        let chunkKey = mediaId # "_" # Int.toText(index);
         mediaChunks.put(chunkKey, mediaChunk);
         #ok("Chunk uploaded successfully")
       };
